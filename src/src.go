@@ -22,7 +22,7 @@ import (
 
 const (
 	// you can limit concurrent net request. It's optional
-	MaxGoroutines = 1
+	MaxGoroutines = 3
 	// timeout for net requests
 	Timeout = 2 * time.Second
 )
@@ -37,6 +37,7 @@ type Monitor struct {
 	StatusMap        map[string]SiteStatus
 	Mtx              *sync.Mutex
 	G                errgroup.Group
+	G2               errgroup.Group
 	Sites            []string
 	RequestFrequency time.Duration
 }
@@ -52,22 +53,32 @@ func NewMonitor(sites []string, requestFrequency time.Duration) *Monitor {
 
 func (m *Monitor) Run(ctx context.Context) error {
 	// run printStatuses and checkSite in different goroutines
+	siteChan := make(chan string)
 	m.G.Go(func() error {
 		return m.printStatuses(ctx)
 	})
 
-	for _, site := range m.Sites {
-		site := site
+	go func() {
+		for _, site := range m.Sites {
+			siteChan <- site
+		}
+		close(siteChan)
+	}()
+
+	for i := 0; i < MaxGoroutines; i++ {
 		m.G.Go(func() error {
 			ticker := time.NewTicker(m.RequestFrequency)
-			defer ticker.Stop()
 
+			defer ticker.Stop()
 			for {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				case <-ticker.C:
-					m.checkSite(ctx, site)
+					v, ok := <-siteChan
+					if ok {
+						m.checkSite(ctx, v)
+					}
 				}
 			}
 		})
@@ -88,13 +99,13 @@ func (m *Monitor) checkSite(ctx context.Context, site string) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, site, nil)
 	if err != nil {
-		logrus.Errorf("Bad request: %s", err)
+		logrus.Errorf("Creqte request error: %s", err)
 		return
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		logrus.Errorf("Cant do request: %s", err)
+		logrus.Errorf("Cant do request error: %s", err)
 		return
 	}
 
@@ -118,8 +129,9 @@ func (m *Monitor) printStatuses(ctx context.Context) error {
 		case <-ticker.C:
 			m.Mtx.Lock()
 			for _, status := range m.StatusMap {
-				fmt.Printf("%s, %d, %v\n", status.Name, status.StatusCode, status.TimeOfRequest)
+				fmt.Printf("%s, %d, %v", status.Name, status.StatusCode, status.TimeOfRequest)
 			}
+			fmt.Println()
 			m.Mtx.Unlock()
 		}
 	}

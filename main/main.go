@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/PandaGoL/goaroundsites/src"
@@ -25,4 +26,6 @@ func main() {
 	if err := monitor.Run(ctx); err != nil {
 		fmt.Println("error:", err)
 	}
+	fmt.Println(runtime.NumGoroutine())
+
 }
