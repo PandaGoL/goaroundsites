@@ -37,7 +37,6 @@ type Monitor struct {
 	StatusMap        map[string]SiteStatus
 	Mtx              *sync.Mutex
 	G                errgroup.Group
-	G2               errgroup.Group
 	Sites            []string
 	RequestFrequency time.Duration
 }
@@ -51,43 +50,35 @@ func NewMonitor(sites []string, requestFrequency time.Duration) *Monitor {
 	}
 }
 
-func (m *Monitor) Run(ctx context.Context) error {
+func (m *Monitor) Run(ctx context.Context) (err error) {
 	// run printStatuses and checkSite in different goroutines
-	siteChan := make(chan string)
-	m.G.Go(func() error {
-		return m.printStatuses(ctx)
-	})
+	m.G.SetLimit(MaxGoroutines)
 
 	go func() {
-		for _, site := range m.Sites {
-			siteChan <- site
-		}
-		close(siteChan)
+		err = m.printStatuses(ctx)
 	}()
 
-	for i := 0; i < MaxGoroutines; i++ {
-		m.G.Go(func() error {
-			ticker := time.NewTicker(m.RequestFrequency)
-
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-ticker.C:
-					v, ok := <-siteChan
-					if ok {
-						m.checkSite(ctx, v)
-					}
-				}
+	ticker := time.NewTicker(m.RequestFrequency)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			for _, v := range m.Sites {
+				v := v
+				m.G.Go(func() error {
+					m.checkSite(ctx, v)
+					return nil
+				})
 			}
-		})
+		}
+		if err = m.G.Wait(); err != nil && err != context.Canceled {
+			break
+		}
 	}
 
-	if err := m.G.Wait(); err != nil && err != context.Canceled {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (m *Monitor) checkSite(ctx context.Context, site string) {
@@ -109,6 +100,8 @@ func (m *Monitor) checkSite(ctx context.Context, site string) {
 		return
 	}
 
+	resp.Body.Close()
+
 	m.Mtx.Lock()
 	m.StatusMap[site] = SiteStatus{
 		Name:          site,
@@ -129,7 +122,7 @@ func (m *Monitor) printStatuses(ctx context.Context) error {
 		case <-ticker.C:
 			m.Mtx.Lock()
 			for _, status := range m.StatusMap {
-				fmt.Printf("%s, %d, %v", status.Name, status.StatusCode, status.TimeOfRequest)
+				fmt.Printf("%s, %d, %v\n", status.Name, status.StatusCode, status.TimeOfRequest)
 			}
 			fmt.Println()
 			m.Mtx.Unlock()
