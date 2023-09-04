@@ -51,11 +51,10 @@ func NewMonitor(sites []string, requestFrequency time.Duration) *Monitor {
 }
 
 func (m *Monitor) Run(ctx context.Context) (err error) {
-	// run printStatuses and checkSite in different goroutines
 	m.G.SetLimit(MaxGoroutines)
 
 	go func() {
-		err = m.printStatuses(ctx)
+		m.printStatuses(ctx)
 	}()
 
 	ticker := time.NewTicker(m.RequestFrequency)
@@ -65,38 +64,37 @@ func (m *Monitor) Run(ctx context.Context) (err error) {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			for _, v := range m.Sites {
-				v := v
+			for _, site := range m.Sites {
+				site := site
 				m.G.Go(func() error {
-					m.checkSite(ctx, v)
+					m.checkSite(ctx, site)
 					return nil
 				})
 			}
 		}
-		if err = m.G.Wait(); err != nil && err != context.Canceled {
+		if err := m.G.Wait(); err != nil && err != context.Canceled {
 			break
 		}
 	}
-
-	return err
+	return nil
 }
 
 func (m *Monitor) checkSite(ctx context.Context, site string) {
-	// check site and write result to StatusMap
-
 	client := http.Client{
 		Timeout: Timeout,
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, site, nil)
+
 	if err != nil {
-		logrus.Errorf("Creqte request error: %s", err)
+		logrus.Error(err)
 		return
 	}
 
 	resp, err := client.Do(req)
+
 	if err != nil {
-		logrus.Errorf("Cant do request error: %s", err)
+		logrus.Error(err)
 		return
 	}
 
@@ -112,9 +110,8 @@ func (m *Monitor) checkSite(ctx context.Context, site string) {
 }
 
 func (m *Monitor) printStatuses(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second * 1)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -122,7 +119,7 @@ func (m *Monitor) printStatuses(ctx context.Context) error {
 		case <-ticker.C:
 			m.Mtx.Lock()
 			for _, status := range m.StatusMap {
-				fmt.Printf("%s, %d, %v\n", status.Name, status.StatusCode, status.TimeOfRequest)
+				fmt.Printf("%s %d %v\n", status.Name, status.StatusCode, status.TimeOfRequest)
 			}
 			fmt.Println()
 			m.Mtx.Unlock()
